@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class LazuliteScraper:
     def __init__(self):
-        self.base_url = settings.lazulite_base_url
+        self.base_url = "https://lazulite.ae/activations"
         self.timeout = settings.selenium_timeout
         self.max_images = settings.max_images_per_product
         self.driver = None
@@ -78,6 +78,9 @@ class LazuliteScraper:
         try:
             # Try multiple selectors for product name
             selectors = [
+                '.product-title h1',
+                '.activation-title',
+                '.product-header h1',
                 'h1.product-title',
                 'h1.page-title',
                 '.product-name h1',
@@ -102,6 +105,9 @@ class LazuliteScraper:
         try:
             # Try multiple selectors for overview
             selectors = [
+                '.product-description .overview',
+                '.activation-overview',
+                '.product-intro',
                 '.product-overview',
                 '.product-description',
                 '.overview-section',
@@ -166,6 +172,9 @@ class LazuliteScraper:
             
             # Try multiple selectors for specifications
             spec_selectors = [
+                '.technical-specifications',
+                '.product-specs-list',
+                '.activation-specs',
                 '.specifications',
                 '.specs',
                 '.product-specs',
@@ -219,6 +228,9 @@ class LazuliteScraper:
             
             # Try multiple selectors
             selectors = [
+                '.integration-features',
+                '.content-management',
+                '.cms-integration',
                 '.content-integration',
                 '.integration',
                 '.connectivity',
@@ -251,6 +263,9 @@ class LazuliteScraper:
             
             # Try multiple selectors
             selectors = [
+                '.installation-requirements',
+                '.technical-requirements',
+                '.setup-requirements',
                 '.infrastructure',
                 '.requirements',
                 '.system-requirements',

@@ -11,6 +11,7 @@ from .auth.routes import router as auth_router
 from .api.chat import router as chat_router
 from .api.ppt import router as ppt_router
 from .api.user import router as user_router
+from .api.extract import router as extract_router
 from .database import create_tables, get_db
 from .config import settings
 
@@ -45,6 +46,7 @@ app.include_router(auth_router, prefix="/auth", tags=["authentication"])
 app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
 app.include_router(ppt_router, prefix="/api/ppt", tags=["presentations"])
 app.include_router(user_router, prefix="/api/user", tags=["user"])
+app.include_router(extract_router, prefix="/api", tags=["content-extraction"])
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="generated"), name="static")

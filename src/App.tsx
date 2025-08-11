@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2 } from 'lucide-react';
-
-// --- Remove Supabase Auth imports ---
-// import { useAuth, AuthProvider } from './lib/supabase';
-// import AuthModal from './components/AuthModal';
+import { Loader2, AlertCircle, CheckCircle, Edit3, Trash2, Plus } from 'lucide-react';
+import { APIService, ScrapedContent } from './services/api';
 
 // --- Helper function to extract required details from the prompt ---
 function extractPromptDetails(prompt: string) {
@@ -40,16 +37,13 @@ interface Message {
   isTyping?: boolean;
   pptDownloadUrl?: string;
   approvalRequired?: boolean;
-  scrapedData?: string;
+  scrapedData?: ScrapedContent;
+  taskId?: string;
+  isGenerating?: boolean;
 }
 
 export default function App() {
-  // --- Remove Supabase Auth logic ---
-  // const { user, loading, signOut } = useAuth();
-  // const isAuthenticated = !!user;
-
-  // --- For demo, assume user is always authenticated ---
-  const isAuthenticated = true;
+  const isAuthenticated = true; // For demo
 
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [actualTheme, setActualTheme] = useState<'light' | 'dark'>('light');
@@ -58,6 +52,9 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<Message | null>(null);
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'available' | 'unavailable'>('checking');
+  const [editingContent, setEditingContent] = useState<ScrapedContent | null>(null);
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Theme management
@@ -90,26 +87,72 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Check backend status on mount
+  useEffect(() => {
+    checkBackendHealth();
+    initializeChatSession();
+  }, []);
+
+  const checkBackendHealth = async () => {
+    try {
+      const health = await APIService.healthCheck();
+      setBackendStatus(health.backend_available ? 'available' : 'unavailable');
+    } catch (error) {
+      setBackendStatus('unavailable');
+    }
+  };
+
+  const initializeChatSession = async () => {
+    try {
+      if (backendStatus === 'available') {
+        const session = await APIService.createChatSession();
+        setChatSessionId(session.session_id);
+      }
+    } catch (error) {
+      console.error('Failed to create chat session:', error);
+    }
+  };
+
   // Welcome message
   useEffect(() => {
     if (isAuthenticated && messages.length === 0) {
+      const statusMessage = backendStatus === 'unavailable' 
+        ? "\n\n⚠️ Backend is not available. Using demo mode with simulated responses."
+        : "\n\n✅ Connected to Lazulite AI backend.";
+
       setMessages([{
         id: '1',
-        text: "Welcome to Lazulite AI PPT Generator! Enter your event details and products to generate a PowerPoint. Make sure to include:\n• Event Name\n• Event Date\n• Event Location\n• Salesperson Name\n• Products\n\nFor example:\n" + referencePrompt,
+        text: "Welcome to Lazulite AI PPT Generator! Enter your event details and products to generate a PowerPoint. Make sure to include:\n• Event Name\n• Event Date\n• Event Location\n• Salesperson Name\n• Products\n\nFor example:\n" + referencePrompt + statusMessage,
         sender: 'ai',
         timestamp: new Date(),
       }]);
     }
-  }, [isAuthenticated, messages.length]);
+  }, [isAuthenticated, messages.length, backendStatus]);
 
-  // --- Simulated Web Scraping Function ---
-  async function scrapeProductData(productNames: string[]): Promise<string> {
-    // Simulate scraping with a delay and dummy data
-    await new Promise(res => setTimeout(res, 1500));
-    return productNames.map(p => 
-      `Product: ${p}\nOverview: This is a simulated overview for ${p}.\nSpecifications: Simulated specs for ${p}.\nContent Integration: Simulated specs for ${p}.\nInfrastructure Requirements: Simulated specs for ${p}.\nImages: [Simulated image URLs]\n`
-    ).join('\n');
-  }
+  // --- Real Content Extraction ---
+  const extractProductContent = async (productNames: string[]): Promise<ScrapedContent> => {
+    if (backendStatus === 'unavailable') {
+      // Fallback to simulated data
+      await new Promise(res => setTimeout(res, 2000));
+      return {
+        overview: `${productNames.join(', ')} offer cutting-edge interactive technology solutions. These products combine advanced AI capabilities with stunning visual displays for enhanced user engagement.`,
+        specifications: [
+          "High-resolution 4K display with touch interface",
+          "AI-powered gesture recognition and facial detection"
+        ],
+        content_integration: [
+          "Seamless CMS integration with real-time content updates",
+          "Multi-platform compatibility with cloud-based management"
+        ],
+        infrastructure_requirements: [
+          "Stable internet connection (minimum 50 Mbps)",
+          "Dedicated power supply with backup systems"
+        ]
+      };
+    }
+
+    return await APIService.extractProductContent(productNames);
+  };
 
   // --- Message Send Handler ---
   const handleSendMessage = async () => {
@@ -133,7 +176,6 @@ export default function App() {
         }
       ]);
       setInputText('');
-      setIsLoading(false);
       return;
     }
 
@@ -150,26 +192,40 @@ export default function App() {
     setInputText('');
     setIsLoading(true);
 
-    // Simulate scraping product data
-    const scrapedData = await scrapeProductData(details.products);
+    try {
+      // Extract product content from website
+      const scrapedData = await extractProductContent(details.products);
 
-    // Ask for user approval
-    const approvalMsg: Message = {
-      id: (Date.now() + 1).toString(),
-      text: `Here is the extracted data for your products:\n\n${scrapedData}\n\nDo you approve this content to be used for PPT generation?`,
-      sender: 'ai',
-      timestamp: new Date(),
-      approvalRequired: true,
-      scrapedData,
-    };
-    setMessages(prev => [...prev, approvalMsg]);
-    setPendingApproval(approvalMsg);
+      // Ask for user approval
+      const approvalMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        text: `I've extracted content for your products from the Lazulite website. Please review and approve:`,
+        sender: 'ai',
+        timestamp: new Date(),
+        approvalRequired: true,
+        scrapedData,
+      };
+      setMessages(prev => [...prev, approvalMsg]);
+      setPendingApproval(approvalMsg);
+    } catch (error) {
+      setMessages(prev => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          text: `❌ Failed to extract product content: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          sender: 'ai',
+          timestamp: new Date(),
+        }
+      ]);
+    }
+    
     setIsLoading(false);
   };
 
   // --- Handle User Approval ---
-  const handleApproval = (approved: boolean) => {
-    if (!pendingApproval) return;
+  const handleApproval = async (approved: boolean) => {
+    if (!pendingApproval || !pendingApproval.scrapedData) return;
+
     if (approved) {
       setMessages(prev => [
         ...prev,
@@ -178,27 +234,86 @@ export default function App() {
           text: "✅ Content approved! Generating your PowerPoint presentation...",
           sender: 'ai',
           timestamp: new Date(),
-        },
-        {
-          id: (Date.now() + 3).toString(),
-          text: "✨ Your presentation has been generated successfully!\n\n📑 The PowerPoint includes:\n• Product overview\n• Specifications\n• Images\n• Content integration\n• Infrastructure requirements\n\n(Download functionality would connect to backend API.)",
-          sender: 'ai',
-          timestamp: new Date(),
-          pptDownloadUrl: '#',
+          isGenerating: true,
         }
       ]);
+
+      try {
+        const result = await APIService.generatePPT({
+          prompt: inputText,
+          approved_content: pendingApproval.scrapedData
+        });
+
+        // Poll for completion
+        pollPPTStatus(result.task_id);
+      } catch (error) {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: (Date.now() + 3).toString(),
+            text: `❌ Failed to start PPT generation: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            sender: 'ai',
+            timestamp: new Date(),
+          }
+        ]);
+      }
     } else {
       setMessages(prev => [
         ...prev,
         {
           id: (Date.now() + 2).toString(),
-          text: "❌ Content not approved. Please modify your prompt or contact support.",
+          text: "❌ Content not approved. You can modify the content using the edit options above, or provide new requirements.",
           sender: 'ai',
           timestamp: new Date(),
         }
       ]);
     }
     setPendingApproval(null);
+  };
+
+  // --- Poll PPT Generation Status ---
+  const pollPPTStatus = async (taskId: string) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const status = await APIService.checkPPTStatus(taskId);
+        
+        if (status.status === 'completed' && status.download_url) {
+          clearInterval(pollInterval);
+          setMessages(prev => [
+            ...prev.filter(m => !m.isGenerating),
+            {
+              id: (Date.now() + 4).toString(),
+              text: "✨ Your presentation has been generated successfully!",
+              sender: 'ai',
+              timestamp: new Date(),
+              pptDownloadUrl: status.download_url,
+            }
+          ]);
+        } else if (status.status === 'failed') {
+          clearInterval(pollInterval);
+          setMessages(prev => [
+            ...prev.filter(m => !m.isGenerating),
+            {
+              id: (Date.now() + 4).toString(),
+              text: `❌ PPT generation failed: ${status.error_message || 'Unknown error'}`,
+              sender: 'ai',
+              timestamp: new Date(),
+            }
+          ]);
+        }
+      } catch (error) {
+        clearInterval(pollInterval);
+        setMessages(prev => [
+          ...prev.filter(m => !m.isGenerating),
+          {
+            id: (Date.now() + 4).toString(),
+            text: `❌ Error checking PPT status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            sender: 'ai',
+            timestamp: new Date(),
+          }
+        ]);
+      }
+    }, 3000);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -209,8 +324,172 @@ export default function App() {
   };
 
   const handleDownload = (url: string) => {
-    // For demo, open the URL in a new tab (replace with actual download logic)
     window.open(url, '_blank');
+  };
+
+  // --- Content Editing Functions ---
+  const handleEditContent = (content: ScrapedContent) => {
+    setEditingContent({ ...content });
+  };
+
+  const handleSaveEdit = () => {
+    if (!editingContent || !pendingApproval) return;
+    
+    const updatedMessage = {
+      ...pendingApproval,
+      scrapedData: editingContent
+    };
+    
+    setMessages(prev => prev.map(msg => 
+      msg.id === pendingApproval.id ? updatedMessage : msg
+    ));
+    
+    setPendingApproval(updatedMessage);
+    setEditingContent(null);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingContent(null);
+  };
+
+  // --- Content Display Component ---
+  const ContentDisplay: React.FC<{ content: ScrapedContent; isEditing?: boolean }> = ({ 
+    content, 
+    isEditing = false 
+  }) => {
+    const currentContent = isEditing ? editingContent! : content;
+    
+    return (
+      <div className={`mt-3 p-4 rounded-lg border ${
+        actualTheme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-gray-50 border-gray-200'
+      }`}>
+        <div className="space-y-4">
+          {/* Overview */}
+          <div>
+            <h4 className="font-semibold text-sm mb-2 flex items-center">
+              📋 Overview
+              {isEditing && (
+                <Edit3 className="w-3 h-3 ml-1 text-blue-500" />
+              )}
+            </h4>
+            {isEditing ? (
+              <textarea
+                value={currentContent.overview}
+                onChange={(e) => setEditingContent(prev => prev ? {...prev, overview: e.target.value} : null)}
+                className="w-full p-2 text-xs rounded border resize-none"
+                rows={2}
+              />
+            ) : (
+              <p className="text-xs text-gray-600 dark:text-gray-300">{currentContent.overview}</p>
+            )}
+          </div>
+
+          {/* Specifications */}
+          <div>
+            <h4 className="font-semibold text-sm mb-2">⚙️ Specifications</h4>
+            <ul className="space-y-1">
+              {currentContent.specifications.map((spec, idx) => (
+                <li key={idx} className="text-xs text-gray-600 dark:text-gray-300 flex items-start">
+                  <span className="mr-2">•</span>
+                  {isEditing ? (
+                    <input
+                      value={spec}
+                      onChange={(e) => {
+                        const newSpecs = [...currentContent.specifications];
+                        newSpecs[idx] = e.target.value;
+                        setEditingContent(prev => prev ? {...prev, specifications: newSpecs} : null);
+                      }}
+                      className="flex-1 p-1 text-xs rounded border"
+                    />
+                  ) : (
+                    <span>{spec}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Content Integration */}
+          <div>
+            <h4 className="font-semibold text-sm mb-2">🔗 Content Integration</h4>
+            <ul className="space-y-1">
+              {currentContent.content_integration.map((item, idx) => (
+                <li key={idx} className="text-xs text-gray-600 dark:text-gray-300 flex items-start">
+                  <span className="mr-2">•</span>
+                  {isEditing ? (
+                    <input
+                      value={item}
+                      onChange={(e) => {
+                        const newItems = [...currentContent.content_integration];
+                        newItems[idx] = e.target.value;
+                        setEditingContent(prev => prev ? {...prev, content_integration: newItems} : null);
+                      }}
+                      className="flex-1 p-1 text-xs rounded border"
+                    />
+                  ) : (
+                    <span>{item}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Infrastructure Requirements */}
+          <div>
+            <h4 className="font-semibold text-sm mb-2">🏗️ Infrastructure Requirements</h4>
+            <ul className="space-y-1">
+              {currentContent.infrastructure_requirements.map((req, idx) => (
+                <li key={idx} className="text-xs text-gray-600 dark:text-gray-300 flex items-start">
+                  <span className="mr-2">•</span>
+                  {isEditing ? (
+                    <input
+                      value={req}
+                      onChange={(e) => {
+                        const newReqs = [...currentContent.infrastructure_requirements];
+                        newReqs[idx] = e.target.value;
+                        setEditingContent(prev => prev ? {...prev, infrastructure_requirements: newReqs} : null);
+                      }}
+                      className="flex-1 p-1 text-xs rounded border"
+                    />
+                  ) : (
+                    <span>{req}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        {/* Edit Controls */}
+        {isEditing ? (
+          <div className="mt-4 flex space-x-2">
+            <button
+              onClick={handleSaveEdit}
+              className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700"
+            >
+              <CheckCircle className="w-3 h-3 inline mr-1" />
+              Save Changes
+            </button>
+            <button
+              onClick={handleCancelEdit}
+              className="px-3 py-1 bg-gray-600 text-white text-xs rounded hover:bg-gray-700"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="mt-4">
+            <button
+              onClick={() => handleEditContent(content)}
+              className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+            >
+              <Edit3 className="w-3 h-3 inline mr-1" />
+              Edit Content
+            </button>
+          </div>
+        )}
+      </div>
+    );
   };
 
   // --- Settings Modal ---
@@ -243,6 +522,25 @@ export default function App() {
                 <option value="dark">Dark</option>
                 <option value="system">System</option>
               </select>
+            </div>
+            <div>
+              <label className="block font-medium mb-2">Backend Status</label>
+              <div className="flex items-center space-x-2">
+                {backendStatus === 'checking' && <Loader2 className="w-4 h-4 animate-spin" />}
+                {backendStatus === 'available' && <CheckCircle className="w-4 h-4 text-green-500" />}
+                {backendStatus === 'unavailable' && <AlertCircle className="w-4 h-4 text-red-500" />}
+                <span className="text-sm">
+                  {backendStatus === 'checking' && 'Checking...'}
+                  {backendStatus === 'available' && 'Connected'}
+                  {backendStatus === 'unavailable' && 'Disconnected (Demo Mode)'}
+                </span>
+              </div>
+              <button
+                onClick={checkBackendHealth}
+                className="mt-2 px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+              >
+                Retry Connection
+              </button>
             </div>
           </div>
         </div>
@@ -282,7 +580,14 @@ export default function App() {
             : 'border-gray-200/50 bg-white/80'
         }`}>
           <div className="flex items-center justify-between px-6 py-4">
-            <span className="font-bold text-xl">Lazulite AI PPT Generator</span>
+            <div className="flex items-center space-x-3">
+              <span className="font-bold text-xl">Lazulite AI PPT Generator</span>
+              {backendStatus === 'unavailable' && (
+                <span className="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded-full">
+                  Demo Mode
+                </span>
+              )}
+            </div>
             <button
               className="text-gray-500 hover:text-blue-600"
               onClick={() => setSettingsOpen(true)}
@@ -300,6 +605,7 @@ export default function App() {
               <span className="font-semibold">Reference Prompt:</span> {referencePrompt}
             </div>
           </div>
+          
           {/* Chat Messages */}
           <div className="flex-1 overflow-y-auto max-w-4xl mx-auto w-full mb-4">
             {messages.map((msg) => (
@@ -317,6 +623,24 @@ export default function App() {
                       : 'bg-white text-gray-900'
                 }`}>
                   <div className="text-sm whitespace-pre-line">{msg.text}</div>
+                  
+                  {/* Show scraped content */}
+                  {msg.scrapedData && (
+                    <ContentDisplay 
+                      content={msg.scrapedData} 
+                      isEditing={editingContent !== null && msg.id === pendingApproval?.id}
+                    />
+                  )}
+                  
+                  {/* Loading indicator for generation */}
+                  {msg.isGenerating && (
+                    <div className="mt-3 flex items-center space-x-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span className="text-xs">Generating presentation...</span>
+                    </div>
+                  )}
+                  
+                  {/* Download button */}
                   {msg.pptDownloadUrl && (
                     <button
                       className="mt-2 px-4 py-2 rounded bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700"
@@ -325,17 +649,19 @@ export default function App() {
                       Download PPT
                     </button>
                   )}
+                  
                   <div className="text-xs text-gray-400 mt-1">
                     {msg.sender === 'user' ? 'You' : 'AI'} • {msg.timestamp.toLocaleTimeString()}
                   </div>
+                  
                   {/* Approval Buttons */}
-                  {msg.approvalRequired && (
+                  {msg.approvalRequired && !editingContent && (
                     <div className="mt-3 flex space-x-2">
                       <button
                         className="px-4 py-2 rounded bg-green-600 text-white text-xs font-semibold hover:bg-green-700"
                         onClick={() => handleApproval(true)}
                       >
-                        Approve
+                        Approve & Generate PPT
                       </button>
                       <button
                         className="px-4 py-2 rounded bg-red-600 text-white text-xs font-semibold hover:bg-red-700"
@@ -350,6 +676,7 @@ export default function App() {
             ))}
             <div ref={messagesEndRef} />
           </div>
+          
           {/* Chat Input */}
           <form
             className="max-w-4xl mx-auto w-full flex items-center space-x-2"
@@ -369,16 +696,16 @@ export default function App() {
               value={inputText}
               onChange={e => setInputText(e.target.value)}
               onKeyDown={handleKeyPress}
-              disabled={isLoading || !!pendingApproval}
+              disabled={isLoading || !!pendingApproval || !!editingContent}
             />
             <button
               type="submit"
               className={`px-6 py-3 rounded-xl font-semibold transition ${
-                isLoading || !!pendingApproval
+                isLoading || !!pendingApproval || !!editingContent
                   ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
                   : 'bg-blue-600 text-white hover:bg-blue-700'
               }`}
-              disabled={isLoading || !!pendingApproval}
+              disabled={isLoading || !!pendingApproval || !!editingContent}
             >
               {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Send'}
             </button>
