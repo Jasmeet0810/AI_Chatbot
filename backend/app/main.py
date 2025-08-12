@@ -1,18 +1,13 @@
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import os
 import logging
 
-from .auth.routes import router as auth_router
-from .api.chat import router as chat_router
-from .api.ppt import router as ppt_router
-from .api.user import router as user_router
 from .api.extract import router as extract_router
-from .database import create_tables, get_db
+from .api.ppt import router as ppt_router
 from .config import settings
 
 # Configure logging
@@ -32,28 +27,19 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:8080"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Create database tables
-create_tables()
-
 # Include routers
-app.include_router(auth_router, prefix="/auth", tags=["authentication"])
-app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
-app.include_router(ppt_router, prefix="/api/ppt", tags=["presentations"])
-app.include_router(user_router, prefix="/api/user", tags=["user"])
 app.include_router(extract_router, prefix="/api", tags=["content-extraction"])
+app.include_router(ppt_router, prefix="/api/ppt", tags=["presentations"])
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="generated"), name="static")
-
-class PPTRequest(BaseModel):
-    prompt: str
-    product_url: Optional[str] = None
+if os.path.exists(settings.generated_dir):
+    app.mount("/static", StaticFiles(directory=settings.generated_dir), name="static")
 
 @app.get("/")
 async def root():
@@ -68,25 +54,14 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     try:
-        # Check database connection
-        from .database import SessionLocal
-        db = SessionLocal()
-        db.execute("SELECT 1")
-        db.close()
-        db_status = "healthy"
-    except Exception as e:
-        db_status = f"unhealthy: {str(e)}"
-    
-    # Check AI service
-    try:
-        from .ai.langchain_service import langchain_service
-        ai_status = "healthy" if langchain_service.is_available() else "unavailable"
+        # Check AI service
+        from .ai.bedrock_service import bedrock_service
+        ai_status = "healthy" if bedrock_service.is_available() else "unavailable"
     except Exception as e:
         ai_status = f"unhealthy: {str(e)}"
     
     return {
         "status": "healthy",
-        "database": db_status,
         "ai_service": ai_status,
         "environment": settings.environment
     }

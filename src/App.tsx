@@ -363,13 +363,24 @@ export default function App() {
 
   // --- Content Display Component ---
   const MultiProductDisplay: React.FC<{ 
-    multiProductData: MultiProductResponse; 
+    multiProductData?: MultiProductResponse; 
     isEditing?: boolean;
     editingProductIndex?: number | null;
   }> = ({ 
     multiProductData, 
     isEditing = false 
   }) => {
+    // Guard against undefined data
+    if (!multiProductData || !multiProductData.products) {
+      return (
+        <div className={`mt-3 p-4 rounded-lg border ${
+          actualTheme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-gray-50 border-gray-200'
+        }`}>
+          <p className="text-sm text-gray-500">No product data available</p>
+        </div>
+      );
+    }
+
     return (
       <div className={`mt-3 p-4 rounded-lg border ${
         actualTheme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-gray-50 border-gray-200'
