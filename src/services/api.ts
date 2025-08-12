@@ -303,10 +303,16 @@ export class APIService {
    */
   static async healthCheck(): Promise<{ status: string; backend_available: boolean }> {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
       const response = await fetch(`${API_BASE_URL}/health`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         return { status: 'unhealthy', backend_available: false };
@@ -314,8 +320,16 @@ export class APIService {
 
       const data = await response.json();
       return { status: data.status, backend_available: true };
-    } catch (error) {
+    } catch (error: any) {
       console.error('Health Check Error:', error);
+      
+      // Provide more specific error information
+      if (error.name === 'AbortError') {
+        console.error('Health check timed out after 5 seconds');
+      } else if (error.message?.includes('fetch')) {
+        console.error('Backend server is not running or not accessible at:', API_BASE_URL);
+      }
+      
       return { status: 'unhealthy', backend_available: false };
     }
   }
