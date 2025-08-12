@@ -40,12 +40,36 @@ def generate_ppt_task(self, generation_id: str, user_id: str, prompt: str, produ
             meta={'progress': 'Extracting product data from Lazulite website...', 'step': 2, 'total_steps': 6}
         )
         
-        data_extractor = DataExtractor()
+        from ..scraping.multi_product_extractor import MultiProductExtractor
+        multi_extractor = MultiProductExtractor()
         
         # Step 2: Extract product data
         try:
-            product_data = data_extractor.extract_complete_product_data(product_url)
-            logger.info(f"Extracted product data: {product_data['name']}")
+            # Parse product names from prompt (simplified)
+            import re
+            product_match = re.search(r'products?:\s*([^.]+)', prompt, re.IGNORECASE)
+            if product_match:
+                product_names = [name.strip() for name in product_match.group(1).split(',')]
+            else:
+                product_names = ['AI Photobooth']  # Default fallback
+            
+            # Extract data for each product
+            multi_product_data = []
+            for product_name in product_names:
+                product_data = multi_extractor.extract_single_product_data(product_name, product_url)
+                
+                # Process images
+                processed_images = multi_extractor.process_product_images(
+                    product_data.get('images', []),
+                    product_name
+                )
+                
+                # Add processed data
+                product_data['images'] = processed_images
+                product_data['image_layout'] = 'single' if len(processed_images) == 1 else 'side_by_side' if len(processed_images) == 2 else 'grid'
+                multi_product_data.append(product_data)
+            
+            logger.info(f"Extracted data for {len(multi_product_data)} products")
         except Exception as e:
             logger.error(f"Data extraction failed: {str(e)}")
             raise Exception(f"Failed to extract product data: {str(e)}")
@@ -56,12 +80,10 @@ def generate_ppt_task(self, generation_id: str, user_id: str, prompt: str, produ
             meta={'progress': 'Validating extracted data...', 'step': 3, 'total_steps': 6}
         )
         
-        validation = data_extractor.validate_extracted_data(product_data)
-        if not validation['is_valid']:
-            logger.warning(f"Data validation failed: {validation['errors']}")
-            # Continue with warnings, but log them
-            for warning in validation['warnings']:
-                logger.warning(f"Data validation warning: {warning}")
+        # Validate each product's data
+        for product_data in multi_product_data:
+            if not product_data.get('name'):
+                logger.warning(f"Product missing name: {product_data}")
         
         # Step 4: Prepare template
         current_task.update_state(
@@ -81,7 +103,7 @@ def generate_ppt_task(self, generation_id: str, user_id: str, prompt: str, produ
         generator = PPTGenerator(template_path)
         
         try:
-            ppt_path = generator.generate_presentation(product_data, prompt, user_id)
+            ppt_path = generator.generate_presentation(multi_product_data, prompt, user_id)
             logger.info(f"PPT generated successfully: {ppt_path}")
         except Exception as e:
             logger.error(f"PPT generation failed: {str(e)}")
@@ -105,7 +127,7 @@ def generate_ppt_task(self, generation_id: str, user_id: str, prompt: str, produ
         
         # Cleanup processed files
         try:
-            data_extractor.cleanup_processed_files(product_data)
+            multi_extractor.close()
         except Exception as e:
             logger.warning(f"Cleanup failed: {str(e)}")
         
@@ -116,7 +138,7 @@ def generate_ppt_task(self, generation_id: str, user_id: str, prompt: str, produ
             "download_url": download_url,
             "file_path": ppt_path,
             "filename": filename,
-            "product_name": product_data.get('name', 'Unknown Product'),
+            "products_count": len(multi_product_data),
             "slide_count": generator.get_presentation_info(ppt_path).get('slide_count', 0)
         }
         

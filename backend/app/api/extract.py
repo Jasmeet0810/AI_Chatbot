@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 from pydantic import BaseModel
 from ..database import get_db, User
 from ..auth.utils import get_current_user
-from ..scraping.data_extractor import DataExtractor
+from ..scraping.multi_product_extractor import MultiProductExtractor
 from ..ai.content_generator import ContentGenerator
 import logging
 
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-class ContentExtractionRequest(BaseModel):
+class ProductExtractionRequest(BaseModel):
     product_names: List[str]
     base_url: str = "https://lazulite.ae/activations"
     summarization_requirements: Dict[str, Any] = {
@@ -21,116 +21,158 @@ class ContentExtractionRequest(BaseModel):
         "sections": ["specifications", "content_integration", "infrastructure_requirements"]
     }
 
-class ExtractedContent(BaseModel):
+class ProductContent(BaseModel):
+    product_name: str
     overview: str
     specifications: List[str]
     content_integration: List[str]
     infrastructure_requirements: List[str]
+    images: List[str]  # Local file paths for processed images
+    image_layout: str  # "single", "side_by_side", "grid"
 
-@router.post("/extract-content", response_model=ExtractedContent)
-async def extract_and_summarize_content(
-    request: ContentExtractionRequest,
+class MultiProductResponse(BaseModel):
+    products: List[ProductContent]
+    total_products: int
+    extraction_status: str
+
+@router.post("/extract-content", response_model=MultiProductResponse)
+async def extract_multiple_products_content(
+    request: ProductExtractionRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Extract product content from Lazulite website and summarize using AI"""
+    """Extract content for multiple products from Lazulite website"""
     try:
-        logger.info(f"Content extraction requested for products: {request.product_names}")
+        logger.info(f"Multi-product extraction requested for: {request.product_names}")
         
         # Initialize extractors
-        data_extractor = DataExtractor()
+        multi_extractor = MultiProductExtractor()
         content_generator = ContentGenerator()
         
-        # Extract raw product data from Lazulite website
-        raw_data = data_extractor.extract_complete_product_data(request.base_url)
+        # Extract content for each product individually
+        extracted_products = []
         
-        # Filter and process data for requested products
-        filtered_data = filter_product_data(raw_data, request.product_names)
+        for product_name in request.product_names:
+            try:
+                logger.info(f"Processing product: {product_name}")
+                
+                # Extract raw product data
+                raw_data = multi_extractor.extract_single_product_data(
+                    product_name, 
+                    request.base_url
+                )
+                
+                # Process and convert images
+                processed_images = multi_extractor.process_product_images(
+                    raw_data.get('images', []),
+                    product_name
+                )
+                
+                # Determine image layout based on count
+                image_layout = determine_image_layout(len(processed_images))
+                
+                # AI-powered content summarization
+                summarized_content = await summarize_product_content(
+                    raw_data,
+                    product_name,
+                    request.summarization_requirements,
+                    content_generator
+                )
+                
+                # Create product content structure
+                product_content = ProductContent(
+                    product_name=product_name,
+                    overview=summarized_content['overview'],
+                    specifications=summarized_content['specifications'],
+                    content_integration=summarized_content['content_integration'],
+                    infrastructure_requirements=summarized_content['infrastructure_requirements'],
+                    images=processed_images,
+                    image_layout=image_layout
+                )
+                
+                extracted_products.append(product_content)
+                logger.info(f"Successfully processed product: {product_name}")
+                
+            except Exception as e:
+                logger.error(f"Failed to process product {product_name}: {str(e)}")
+                # Add fallback content for failed products
+                fallback_content = create_fallback_product_content(product_name)
+                extracted_products.append(fallback_content)
         
-        # Summarize content using AI according to your requirements
-        summarized_content = await summarize_content_with_ai(
-            filtered_data, 
-            request.summarization_requirements,
-            content_generator
+        logger.info(f"Multi-product extraction completed. Processed {len(extracted_products)} products")
+        
+        return MultiProductResponse(
+            products=extracted_products,
+            total_products=len(extracted_products),
+            extraction_status="completed"
         )
         
-        logger.info("Content extraction and summarization completed successfully")
-        
-        return ExtractedContent(**summarized_content)
-        
     except Exception as e:
-        logger.error(f"Content extraction failed: {str(e)}")
+        logger.error(f"Multi-product extraction failed: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to extract content: {str(e)}"
         )
 
-def filter_product_data(raw_data: Dict[str, Any], product_names: List[str]) -> Dict[str, Any]:
-    """Filter raw data to include only requested products"""
-    # Extract content specific to requested products
-    # This will search for product-specific content on the page
-    filtered_content = {
-        "overview": raw_data.get('overview', ''),
-        "specifications": raw_data.get('specifications', {}),
-        "content_integration": raw_data.get('content_integration', []),
-        "infrastructure_requirements": raw_data.get('infrastructure_requirements', [])
-    }
-    
-    # Filter content based on product names mentioned
-    for product_name in product_names:
-        # Search for product-specific content in the scraped data
-        # This is a simplified approach - in production, you might scrape individual product pages
-        pass
-    
-    return filtered_content
+def determine_image_layout(image_count: int) -> str:
+    """Determine image layout based on count"""
+    if image_count == 1:
+        return "single"
+    elif image_count == 2:
+        return "side_by_side"
+    elif image_count >= 3:
+        return "grid"
+    else:
+        return "none"
 
-async def summarize_content_with_ai(
-    data: Dict[str, Any], 
+async def summarize_product_content(
+    raw_data: Dict[str, Any],
+    product_name: str,
     requirements: Dict[str, Any],
     content_generator: ContentGenerator
 ) -> Dict[str, Any]:
-    """Use AI to summarize content according to your specific requirements"""
+    """AI-powered content summarization for specific format"""
     
     try:
-        # Overview: Condense to exactly 2 lines while preserving core content
+        # Overview: Condense to exactly 2 lines
         overview_prompt = f"""
-        Take the following product overview and condense it to exactly 2 concise lines.
+        Take the following product overview for {product_name} and condense it to exactly 2 concise lines.
         Keep all the important product information but make it shorter and more professional.
-        Do not change the core content, just make it more concise.
+        Do not change the core content, just make it more concise and clear.
         
-        Original overview: {data.get('overview', '')}
+        Original overview: {raw_data.get('overview', '')}
         
         Condensed overview (exactly 2 lines):
         """
         
-        # Specifications: Convert to 2 key points
+        # Specifications: Extract 2 key points
         specs_prompt = f"""
-        From the following specifications, extract the 2 most important technical specifications.
-        Convert them into clear, concise bullet points.
+        From the following specifications for {product_name}, extract the 2 most important technical specifications.
+        Convert them into clear, concise bullet points without bullet symbols.
         
-        Original specifications: {str(data.get('specifications', {}))}
+        Original specifications: {str(raw_data.get('specifications', {}))}
         
-        Top 2 specifications (as bullet points):
+        Top 2 specifications (as 2 separate lines):
         """
         
-        # Content Integration: Extract 2 key integration features
+        # Content Integration: Extract 2 key features
         integration_prompt = f"""
-        From the following content integration information, extract the 2 most important integration capabilities.
-        Convert them into clear, actionable points.
+        From the following content integration information for {product_name}, extract the 2 most important integration capabilities.
+        Convert them into clear, actionable points without bullet symbols.
         
-        Original content integration: {str(data.get('content_integration', []))}
+        Original content integration: {str(raw_data.get('content_integration', []))}
         
-        Top 2 integration features (as bullet points):
+        Top 2 integration features (as 2 separate lines):
         """
         
         # Infrastructure: Extract 2 key requirements
         infrastructure_prompt = f"""
-        From the following infrastructure requirements, extract the 2 most critical requirements.
-        Convert them into clear, specific points.
+        From the following infrastructure requirements for {product_name}, extract the 2 most critical requirements.
+        Convert them into clear, specific points without bullet symbols.
         
-        Original infrastructure requirements: {str(data.get('infrastructure_requirements', []))}
+        Original infrastructure requirements: {str(raw_data.get('infrastructure_requirements', []))}
         
-        Top 2 infrastructure requirements (as bullet points):
+        Top 2 infrastructure requirements (as 2 separate lines):
         """
         
         # Generate summaries using AI
@@ -141,27 +183,21 @@ async def summarize_content_with_ai(
             infrastructure_summary = content_generator.langchain.generate_text(infrastructure_prompt)
             
             # Parse AI responses into proper format
-            spec_points = [line.strip().lstrip('•-*').strip() for line in specs_summary.split('\n') if line.strip()][:2]
-            integration_points = [line.strip().lstrip('•-*').strip() for line in integration_summary.split('\n') if line.strip()][:2]
-            infrastructure_points = [line.strip().lstrip('•-*').strip() for line in infrastructure_summary.split('\n') if line.strip()][:2]
+            spec_points = [line.strip() for line in specs_summary.split('\n') if line.strip()][:2]
+            integration_points = [line.strip() for line in integration_summary.split('\n') if line.strip()][:2]
+            infrastructure_points = [line.strip() for line in infrastructure_summary.split('\n') if line.strip()][:2]
+            
+            # Ensure we have exactly 2 points for each section
+            spec_points = ensure_two_points(spec_points, "High-resolution display with advanced processing", "AI-powered features with real-time analytics")
+            integration_points = ensure_two_points(integration_points, "Seamless CMS integration with real-time updates", "Multi-platform compatibility with cloud management")
+            infrastructure_points = ensure_two_points(infrastructure_points, "Stable internet connection (minimum 50 Mbps)", "Dedicated power supply with backup systems")
             
         else:
             # Fallback: basic summarization without AI
-            overview_summary = data.get('overview', '')[:200] + "..."
-            
-            # Extract key specifications
-            specs = data.get('specifications', {})
-            spec_points = list(specs.values())[:2] if specs else ["High-resolution display", "Advanced processing capabilities"]
-            
-            # Extract integration points
-            integration_points = data.get('content_integration', [])[:2]
-            if not integration_points:
-                integration_points = ["CMS integration support", "Real-time content updates"]
-            
-            # Extract infrastructure points
-            infrastructure_points = data.get('infrastructure_requirements', [])[:2]
-            if not infrastructure_points:
-                infrastructure_points = ["Stable internet connection required", "Dedicated power supply needed"]
+            overview_summary = raw_data.get('overview', '')[:200] + "..."
+            spec_points = ["High-resolution display with advanced processing", "AI-powered features with real-time analytics"]
+            integration_points = ["Seamless CMS integration with real-time updates", "Multi-platform compatibility with cloud management"]
+            infrastructure_points = ["Stable internet connection (minimum 50 Mbps)", "Dedicated power supply with backup systems"]
         
         return {
             "overview": overview_summary.strip(),
@@ -171,30 +207,74 @@ async def summarize_content_with_ai(
         }
         
     except Exception as e:
-        logger.error(f"AI summarization failed: {str(e)}")
-        # Fallback to basic summarization
-        return {
-            "overview": "Advanced interactive technology solution with cutting-edge features. Designed for enhanced user engagement and seamless integration.",
-            "specifications": ["High-resolution 4K display with touch interface", "AI-powered gesture recognition and facial detection"],
-            "content_integration": ["Seamless CMS integration with real-time updates", "Multi-platform compatibility with cloud management"],
-            "infrastructure_requirements": ["Stable internet connection (minimum 50 Mbps)", "Dedicated power supply with backup systems"]
-        }
+        logger.error(f"AI summarization failed for {product_name}: {str(e)}")
+        # Return fallback content
+        return create_fallback_summarized_content(product_name)
+
+def ensure_two_points(points: List[str], fallback1: str, fallback2: str) -> List[str]:
+    """Ensure exactly 2 points are returned"""
+    if len(points) >= 2:
+        return points[:2]
+    elif len(points) == 1:
+        return [points[0], fallback2]
+    else:
+        return [fallback1, fallback2]
+
+def create_fallback_product_content(product_name: str) -> ProductContent:
+    """Create fallback content for failed extractions"""
+    return ProductContent(
+        product_name=product_name,
+        overview=f"{product_name} is an advanced interactive technology solution. It offers cutting-edge features for enhanced user engagement.",
+        specifications=[
+            "High-resolution 4K display with touch interface",
+            "AI-powered gesture recognition and facial detection"
+        ],
+        content_integration=[
+            "Seamless CMS integration with real-time content updates",
+            "Multi-platform compatibility with cloud-based management"
+        ],
+        infrastructure_requirements=[
+            "Stable internet connection (minimum 50 Mbps)",
+            "Dedicated power supply with UPS backup systems"
+        ],
+        images=[],
+        image_layout="none"
+    )
+
+def create_fallback_summarized_content(product_name: str) -> Dict[str, Any]:
+    """Create fallback summarized content"""
+    return {
+        "overview": f"{product_name} offers advanced interactive technology solutions. Designed for enhanced user engagement and seamless integration.",
+        "specifications": [
+            "High-resolution 4K display with touch interface",
+            "AI-powered gesture recognition and facial detection"
+        ],
+        "content_integration": [
+            "Seamless CMS integration with real-time updates",
+            "Multi-platform compatibility with cloud management"
+        ],
+        "infrastructure_requirements": [
+            "Stable internet connection (minimum 50 Mbps)",
+            "Dedicated power supply with backup systems"
+        ]
+    }
 
 @router.post("/modify-content")
-async def modify_content(
-    content: ExtractedContent,
+async def modify_product_content(
+    product_name: str,
+    content: ProductContent,
     modifications: Dict[str, Any],
     current_user: User = Depends(get_current_user)
 ):
-    """Handle user modifications to extracted content"""
+    """Handle user modifications to extracted product content"""
     try:
         # Apply user modifications (add, replace, delete, modify)
         modified_content = apply_user_modifications(content.dict(), modifications)
         
-        return ExtractedContent(**modified_content)
+        return ProductContent(**modified_content)
         
     except Exception as e:
-        logger.error(f"Content modification failed: {str(e)}")
+        logger.error(f"Content modification failed for {product_name}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to modify content: {str(e)}"

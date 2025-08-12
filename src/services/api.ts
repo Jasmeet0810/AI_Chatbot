@@ -20,10 +20,26 @@ export interface ScrapedContent {
   infrastructure_requirements: string[];
 }
 
+export interface ProductContent {
+  product_name: string;
+  overview: string;
+  specifications: string[];
+  content_integration: string[];
+  infrastructure_requirements: string[];
+  images: string[];
+  image_layout: string;
+}
+
+export interface MultiProductResponse {
+  products: ProductContent[];
+  total_products: number;
+  extraction_status: string;
+}
+
 export interface PPTGenerationRequest {
   prompt: string;
   product_url?: string;
-  approved_content?: ScrapedContent;
+  approved_content?: ProductContent[];
 }
 
 export interface TaskStatus {
@@ -47,7 +63,7 @@ export class APIService {
   /**
    * Extract and summarize product content from Lazulite website
    */
-  static async extractProductContent(productNames: string[]): Promise<ScrapedContent> {
+  static async extractProductContent(productNames: string[]): Promise<MultiProductResponse> {
     try {
       // In development, check if backend is available
       if (isDevelopment) {
@@ -88,11 +104,10 @@ export class APIService {
   /**
    * Get simulated content for development/demo purposes
    */
-  private static getSimulatedContent(productNames: string[]): ScrapedContent {
-    const productList = productNames.join(', ');
-    
-    return {
-      overview: `${productList} offer cutting-edge interactive technology solutions designed for modern business environments. These products combine advanced AI capabilities with stunning visual displays to create engaging user experiences.`,
+  private static getSimulatedContent(productNames: string[]): MultiProductResponse {
+    const products: ProductContent[] = productNames.map((productName, index) => ({
+      product_name: productName,
+      overview: `${productName} offers cutting-edge interactive technology solutions designed for modern business environments. This product combines advanced AI capabilities with stunning visual displays to create engaging user experiences.`,
       specifications: [
         "High-resolution 4K display with multi-touch interface and gesture recognition",
         "AI-powered facial detection and real-time analytics with cloud connectivity"
@@ -104,7 +119,18 @@ export class APIService {
       infrastructure_requirements: [
         "Stable internet connection (minimum 50 Mbps) with dedicated network access",
         "Dedicated power supply (220V) with UPS backup and climate control"
-      ]
+      ],
+      images: [
+        `https://via.placeholder.com/800x600/0066cc/ffffff?text=${encodeURIComponent(productName)}+Image+1`,
+        `https://via.placeholder.com/800x600/6600cc/ffffff?text=${encodeURIComponent(productName)}+Image+2`
+      ],
+      image_layout: index === 0 ? "single" : index === 1 ? "side_by_side" : "grid"
+    }));
+
+    return {
+      products,
+      total_products: products.length,
+      extraction_status: "completed"
     };
   }
 
@@ -112,9 +138,9 @@ export class APIService {
    * Modify extracted content based on user feedback
    */
   static async modifyContent(
-    content: ScrapedContent, 
+    content: ProductContent, 
     modifications: Record<string, any>
-  ): Promise<ScrapedContent> {
+  ): Promise<ProductContent> {
     try {
       if (isDevelopment) {
         const health = await this.healthCheck();
@@ -124,7 +150,7 @@ export class APIService {
         }
       }
 
-      const response = await fetch(`${API_BASE_URL}/api/modify-content`, {
+      const response = await fetch(`${API_BASE_URL}/api/modify-content?product_name=${encodeURIComponent(content.product_name)}`, {
         method: 'POST',
         headers: this.getAuthHeaders(),
         body: JSON.stringify({
@@ -149,9 +175,9 @@ export class APIService {
    * Apply modifications locally for demo purposes
    */
   private static applyModificationsLocally(
-    content: ScrapedContent, 
+    content: ProductContent, 
     modifications: Record<string, any>
-  ): ScrapedContent {
+  ): ProductContent {
     const modifiedContent = { ...content };
     
     // Apply modifications based on user input

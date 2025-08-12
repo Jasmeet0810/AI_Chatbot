@@ -62,6 +62,40 @@ class ContentGenerator:
             # Return fallback content
             return self._generate_fallback_content(product_data, user_prompt)
     
+    def enhance_multi_product_content(self, multi_product_data: List[Dict], user_prompt: str) -> Dict[str, Any]:
+        """Enhance content for multiple products"""
+        try:
+            logger.info(f"Starting multi-product content enhancement for {len(multi_product_data)} products")
+            
+            # Generate overall presentation title
+            product_names = [product.get('product_name', 'Product') for product in multi_product_data]
+            
+            if len(product_names) == 1:
+                title = f"{product_names[0]} Presentation"
+            elif len(product_names) == 2:
+                title = f"{product_names[0]} & {product_names[1]} Presentation"
+            else:
+                title = f"Multi-Product Presentation: {', '.join(product_names[:2])} & More"
+            
+            enhanced = {
+                'title': title,
+                'subtitle': f'Powered by Lazulite AI Technology - {len(product_names)} Products',
+                'products': multi_product_data,
+                'total_products': len(multi_product_data)
+            }
+            
+            logger.info("Multi-product content enhancement completed successfully")
+            return enhanced
+            
+        except Exception as e:
+            logger.error(f"Multi-product content enhancement failed: {str(e)}")
+            return {
+                'title': 'Lazulite Product Presentation',
+                'subtitle': 'Powered by Lazulite AI Technology',
+                'products': multi_product_data,
+                'total_products': len(multi_product_data)
+            }
+    
     def _generate_titles(self, product_data: Dict, user_prompt: str) -> Dict[str, str]:
         """Generate presentation title and subtitle"""
         try:

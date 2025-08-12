@@ -4,7 +4,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.enum.shapes import MSO_SHAPE
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from ..ai.content_generator import ContentGenerator
 from ..config import settings
 import logging
@@ -20,10 +20,10 @@ class PPTGenerator:
         # Ensure output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
     
-    def generate_presentation(self, product_data: Dict, user_prompt: str, user_id: str = None) -> str:
-        """Generate PPT from product data and user prompt"""
+    def generate_presentation(self, multi_product_data: List[Dict[str, Any]], user_prompt: str, user_id: str = None) -> str:
+        """Generate PPT from multiple product data and user prompt"""
         try:
-            logger.info(f"Starting PPT generation for prompt: {user_prompt[:50]}...")
+            logger.info(f"Starting multi-product PPT generation for {len(multi_product_data)} products")
             
             # Load template or create new presentation
             if os.path.exists(self.template_path):
@@ -33,8 +33,8 @@ class PPTGenerator:
                 prs = Presentation()
                 logger.info("Created new presentation (template not found)")
             
-            # Generate AI-enhanced content
-            enhanced_content = self.content_generator.enhance_content(product_data, user_prompt)
+            # Generate AI-enhanced content for all products
+            enhanced_content = self.content_generator.enhance_multi_product_content(multi_product_data, user_prompt)
             
             # Clear existing slides if using template
             if len(prs.slides) > 0:
@@ -47,10 +47,14 @@ class PPTGenerator:
             
             # Create slides
             self.create_title_slide(prs, enhanced_content)
-            self.create_overview_slide(prs, enhanced_content)
-            self.create_specifications_slide(prs, enhanced_content)
-            self.create_content_integration_slide(prs, enhanced_content)
-            self.create_infrastructure_slide(prs, enhanced_content)
+            
+            # Create slides for each product
+            for product_data in multi_product_data:
+                self.create_product_overview_slide(prs, product_data)
+                self.create_product_specifications_slide(prs, product_data)
+                self.create_product_integration_slide(prs, product_data)
+                self.create_product_infrastructure_slide(prs, product_data)
+            
             self.create_conclusion_slide(prs, enhanced_content)
             
             # Generate unique filename
@@ -68,6 +72,60 @@ class PPTGenerator:
             logger.error(f"Failed to generate presentation: {str(e)}")
             raise Exception(f"Failed to generate presentation: {str(e)}")
     
+    def create_product_overview_slide(self, prs, product_data: Dict[str, Any]):
+        """Create overview slide for a specific product"""
+        slide_layout = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(slide_layout)
+        
+        slide.shapes.title.text = f"{product_data['product_name']} - Overview"
+        
+        if len(slide.placeholders) > 1:
+            content_placeholder = slide.placeholders[1]
+            content_placeholder.text = product_data.get('overview', 'Product overview not available')
+        
+        # Add images based on layout
+        images = product_data.get('images', [])
+        image_layout = product_data.get('image_layout', 'none')
+        
+        if images and image_layout != 'none':
+            self.add_images_with_layout(slide, images, image_layout)
+    
+    def create_product_specifications_slide(self, prs, product_data: Dict[str, Any]):
+        """Create specifications slide for a specific product"""
+        slide_layout = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(slide_layout)
+        
+        slide.shapes.title.text = f"{product_data['product_name']} - Specifications"
+        
+        if len(slide.placeholders) > 1:
+            content_placeholder = slide.placeholders[1]
+            specs_text = '\n'.join([f"• {spec}" for spec in product_data.get('specifications', [])])
+            content_placeholder.text = specs_text or 'Specifications not available'
+    
+    def create_product_integration_slide(self, prs, product_data: Dict[str, Any]):
+        """Create content integration slide for a specific product"""
+        slide_layout = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(slide_layout)
+        
+        slide.shapes.title.text = f"{product_data['product_name']} - Content Integration"
+        
+        if len(slide.placeholders) > 1:
+            content_placeholder = slide.placeholders[1]
+            integration_text = '\n'.join([f"• {item}" for item in product_data.get('content_integration', [])])
+            content_placeholder.text = integration_text or 'Content integration information not available'
+    
+    def create_product_infrastructure_slide(self, prs, product_data: Dict[str, Any]):
+        """Create infrastructure requirements slide for a specific product"""
+        slide_layout = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(slide_layout)
+        
+        slide.shapes.title.text = f"{product_data['product_name']} - Infrastructure"
+        
+        if len(slide.placeholders) > 1:
+            content_placeholder = slide.placeholders[1]
+            infra_text = '\n'.join([f"• {req}" for req in product_data.get('infrastructure_requirements', [])])
+            content_placeholder.text = infra_text or 'Infrastructure requirements not available'
+    
     def create_title_slide(self, prs, content):
         """Create title slide"""
         if len(prs.slides) == 0:
@@ -83,63 +141,8 @@ class PPTGenerator:
         # Find subtitle placeholder
         for shape in slide.placeholders:
             if shape.placeholder_format.idx == 1:  # Subtitle placeholder
-                shape.text = content.get('subtitle', 'Powered by Lazulite AI Technology')
+                shape.text = content.get('subtitle', 'Multi-Product Presentation - Powered by Lazulite AI')
                 break
-    
-    def create_overview_slide(self, prs, content):
-        """Create product overview slide with images"""
-        slide_layout = prs.slide_layouts[1]  # Content with caption layout
-        slide = prs.slides.add_slide(slide_layout)
-        
-        # Add title
-        slide.shapes.title.text = "Product Overview"
-        
-        # Add content
-        if len(slide.placeholders) > 1:
-            content_placeholder = slide.placeholders[1]
-            content_placeholder.text = content.get('overview_text', 'Product overview not available')
-        
-        # Add images if available
-        images = content.get('images', [])
-        if images:
-            self.add_images_to_slide(slide, images[:4])  # Max 4 images
-    
-    def create_specifications_slide(self, prs, content):
-        """Create specifications slide"""
-        slide_layout = prs.slide_layouts[1]  # Content layout
-        slide = prs.slides.add_slide(slide_layout)
-        
-        slide.shapes.title.text = "Key Specifications"
-        
-        # Add specifications content
-        specs_text = content.get('specifications_text', 'Specifications not available')
-        if len(slide.placeholders) > 1:
-            content_placeholder = slide.placeholders[1]
-            content_placeholder.text = specs_text
-    
-    def create_content_integration_slide(self, prs, content):
-        """Create content integration slide"""
-        slide_layout = prs.slide_layouts[1]
-        slide = prs.slides.add_slide(slide_layout)
-        
-        slide.shapes.title.text = "Content Integration"
-        
-        integration_text = content.get('integration_text', 'Content integration information not available')
-        if len(slide.placeholders) > 1:
-            content_placeholder = slide.placeholders[1]
-            content_placeholder.text = integration_text
-    
-    def create_infrastructure_slide(self, prs, content):
-        """Create infrastructure requirements slide"""
-        slide_layout = prs.slide_layouts[1]
-        slide = prs.slides.add_slide(slide_layout)
-        
-        slide.shapes.title.text = "Infrastructure Requirements"
-        
-        infrastructure_text = content.get('infrastructure_text', 'Infrastructure requirements not available')
-        if len(slide.placeholders) > 1:
-            content_placeholder = slide.placeholders[1]
-            content_placeholder.text = infrastructure_text
     
     def create_conclusion_slide(self, prs, content):
         """Create conclusion slide"""
@@ -152,6 +155,64 @@ class PPTGenerator:
         if len(slide.placeholders) > 1:
             content_placeholder = slide.placeholders[1]
             content_placeholder.text = conclusion_text
+    
+    def add_images_with_layout(self, slide, images: List[str], layout: str):
+        """Add images to slide based on specified layout"""
+        try:
+            if not images:
+                return
+            
+            if layout == "single":
+                self.add_single_image(slide, images[0])
+            elif layout == "side_by_side":
+                self.add_side_by_side_images(slide, images[:2])
+            elif layout == "grid":
+                self.add_grid_images(slide, images[:4])  # Max 4 for grid
+                
+        except Exception as e:
+            logger.error(f"Failed to add images with layout {layout}: {str(e)}")
+    
+    def add_single_image(self, slide, image_path: str):
+        """Add single centered image"""
+        try:
+            if os.path.exists(image_path):
+                left = Inches(2)
+                top = Inches(3)
+                width = Inches(6)
+                height = Inches(4)
+                slide.shapes.add_picture(image_path, left, top, width, height)
+        except Exception as e:
+            logger.warning(f"Failed to add single image: {str(e)}")
+    
+    def add_side_by_side_images(self, slide, images: List[str]):
+        """Add two images side by side"""
+        try:
+            img_width = Inches(3)
+            img_height = Inches(2.5)
+            
+            for i, img_path in enumerate(images[:2]):
+                if os.path.exists(img_path):
+                    left = Inches(1 + i * 4)
+                    top = Inches(3.5)
+                    slide.shapes.add_picture(img_path, left, top, img_width, img_height)
+        except Exception as e:
+            logger.warning(f"Failed to add side by side images: {str(e)}")
+    
+    def add_grid_images(self, slide, images: List[str]):
+        """Add images in 2x2 grid"""
+        try:
+            img_width = Inches(2.5)
+            img_height = Inches(1.8)
+            
+            for i, img_path in enumerate(images[:4]):
+                if os.path.exists(img_path):
+                    col = i % 2
+                    row = i // 2
+                    left = Inches(1 + col * 3.5)
+                    top = Inches(3 + row * 2.2)
+                    slide.shapes.add_picture(img_path, left, top, img_width, img_height)
+        except Exception as e:
+            logger.warning(f"Failed to add grid images: {str(e)}")
     
     def add_images_to_slide(self, slide, images: List[str]):
         """Add converted images to slide"""
