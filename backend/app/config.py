@@ -4,22 +4,10 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 
 class Settings(BaseSettings):
-    # Database
-    database_url: str = Field(default="postgresql://user:password@localhost:5432/lazulite_ppt")
-    
-    # Redis
-    redis_url: str = Field(default="redis://localhost:6379/0")
-    
-    # JWT
-    secret_key: str = Field(default="your-secret-key-change-in-production")
-    algorithm: str = Field(default="HS256")
-    access_token_expire_minutes: int = Field(default=30)
-    
-    # OpenAI
-    openai_api_key: Optional[str] = Field(default=None)
-    
-    # Anthropic (alternative to OpenAI)
-    anthropic_api_key: Optional[str] = Field(default=None)
+    # AWS Bedrock
+    aws_access_key_id: Optional[str] = Field(default=None)
+    aws_secret_access_key: Optional[str] = Field(default=None)
+    aws_region: str = Field(default="us-east-1")
     
     # File Storage
     upload_dir: str = Field(default="uploads")
@@ -31,13 +19,6 @@ class Settings(BaseSettings):
     lazulite_base_url: str = Field(default="https://lazulite.ae/activations")
     selenium_timeout: int = Field(default=30)
     max_images_per_product: int = Field(default=10)
-    
-    # Celery
-    celery_broker_url: str = Field(default="redis://localhost:6379/0")
-    celery_result_backend: str = Field(default="redis://localhost:6379/0")
-    
-    # CORS
-    allowed_origins: list = Field(default=["http://localhost:3000", "http://localhost:5173"])
     
     # Environment
     environment: str = Field(default="development")

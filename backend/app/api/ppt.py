@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from sqlalchemy.orm import Session
-from typing import Optional
+from fastapi import APIRouter, HTTPException, status
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
-from ..database import get_db, User, PPTGeneration
-from ..auth.utils import get_current_user
-from ..tasks.ppt_tasks import generate_ppt_task
+from ..ppt.generator import PPTGenerator
+from ..ppt.templates import PPTTemplateManager
 import logging
+import uuid
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ router = APIRouter()
 # Pydantic models
 class PPTRequest(BaseModel):
     prompt: str
-    product_url: Optional[str] = None
+    approved_content: List[Dict[str, Any]]
     template: Optional[str] = None
 
 class PPTResponse(BaseModel):
@@ -28,51 +28,68 @@ class PPTStatusResponse(BaseModel):
     progress: Optional[str] = None
     download_url: Optional[str] = None
     error_message: Optional[str] = None
-    created_at: str
-    completed_at: Optional[str] = None
+
+# In-memory storage for demo (replace with proper storage in production)
+task_storage = {}
 
 @router.post("/generate", response_model=PPTResponse)
-async def generate_presentation(
-    request: PPTRequest,
-    background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Generate PPT from user prompt"""
+async def generate_presentation(request: PPTRequest):
+    """Generate PPT from user prompt and approved content"""
     try:
-        logger.info(f"PPT generation requested by user {current_user.id}")
+        logger.info("PPT generation requested")
         
-        # Create PPT generation record
-        ppt_generation = PPTGeneration(
-            user_id=current_user.id,
-            prompt=request.prompt,
-            product_url=request.product_url,
-            status="pending"
-        )
+        # Generate unique task ID
+        task_id = str(uuid.uuid4())
         
-        db.add(ppt_generation)
-        db.commit()
-        db.refresh(ppt_generation)
+        # Store task status
+        task_storage[task_id] = {
+            "status": "processing",
+            "progress": "Starting PPT generation...",
+            "download_url": None,
+            "error_message": None
+        }
         
-        # Start background task
-        task = generate_ppt_task.delay(
-            generation_id=str(ppt_generation.id),
-            user_id=str(current_user.id),
-            prompt=request.prompt,
-            product_url=request.product_url or "https://lazulite.ae/activations",
-            template=request.template
-        )
-        
-        # Update generation record with task ID
-        ppt_generation.status = "processing"
-        db.commit()
-        
-        logger.info(f"PPT generation task started: {task.id}")
+        try:
+            # Initialize template manager and generator
+            template_manager = PPTTemplateManager()
+            template_path = template_manager.ensure_template_exists()
+            
+            generator = PPTGenerator(template_path)
+            
+            # Generate PPT with approved content
+            ppt_path = generator.generate_presentation(
+                request.approved_content, 
+                request.prompt,
+                user_id="demo_user"
+            )
+            
+            # Generate download URL
+            filename = os.path.basename(ppt_path)
+            download_url = f"/static/{filename}"
+            
+            # Update task status
+            task_storage[task_id] = {
+                "status": "completed",
+                "progress": "PPT generation completed successfully",
+                "download_url": download_url,
+                "error_message": None
+            }
+            
+            logger.info(f"PPT generation completed successfully: {ppt_path}")
+            
+        except Exception as e:
+            logger.error(f"PPT generation failed: {str(e)}")
+            task_storage[task_id] = {
+                "status": "failed",
+                "progress": "PPT generation failed",
+                "download_url": None,
+                "error_message": str(e)
+            }
         
         return PPTResponse(
-            task_id=task.id,
+            task_id=task_id,
             status="processing",
-            message="PPT generation started. This may take a few minutes."
+            message="PPT generation started"
         )
         
     except Exception as e:
@@ -83,64 +100,23 @@ async def generate_presentation(
         )
 
 @router.get("/status/{task_id}", response_model=PPTStatusResponse)
-async def get_generation_status(
-    task_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def get_generation_status(task_id: str):
     """Get PPT generation status"""
     try:
-        # Get task result
-        from ..tasks.celery_app import celery_app
-        task_result = celery_app.AsyncResult(task_id)
-        
-        # Find corresponding generation record
-        generation = db.query(PPTGeneration).filter(
-            PPTGeneration.user_id == current_user.id
-        ).order_by(PPTGeneration.created_at.desc()).first()
-        
-        if not generation:
+        if task_id not in task_storage:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Generation record not found"
+                detail="Task not found"
             )
         
-        # Determine status
-        if task_result.state == 'PENDING':
-            status_text = "pending"
-            progress = "Task is waiting to be processed"
-        elif task_result.state == 'PROGRESS':
-            status_text = "processing"
-            progress = task_result.info.get('progress', 'Processing...')
-        elif task_result.state == 'SUCCESS':
-            status_text = "completed"
-            progress = "Completed successfully"
-        elif task_result.state == 'FAILURE':
-            status_text = "failed"
-            progress = "Generation failed"
-        else:
-            status_text = task_result.state.lower()
-            progress = f"Status: {task_result.state}"
-        
-        # Get result data if completed
-        download_url = None
-        error_message = None
-        
-        if task_result.state == 'SUCCESS' and task_result.result:
-            result = task_result.result
-            if isinstance(result, dict):
-                download_url = result.get('download_url')
-        elif task_result.state == 'FAILURE':
-            error_message = str(task_result.info)
+        task_info = task_storage[task_id]
         
         return PPTStatusResponse(
             task_id=task_id,
-            status=status_text,
-            progress=progress,
-            download_url=download_url,
-            error_message=error_message,
-            created_at=generation.created_at.isoformat(),
-            completed_at=generation.completed_at.isoformat() if generation.completed_at else None
+            status=task_info["status"],
+            progress=task_info["progress"],
+            download_url=task_info["download_url"],
+            error_message=task_info["error_message"]
         )
         
     except HTTPException:
@@ -153,20 +129,16 @@ async def get_generation_status(
         )
 
 @router.get("/download/{filename}")
-async def download_presentation(
-    filename: str,
-    current_user: User = Depends(get_current_user)
-):
+async def download_presentation(filename: str):
     """Download generated presentation"""
     try:
         from fastapi.responses import FileResponse
         from ..config import settings
-        import os
         
         # Construct file path
         file_path = os.path.join(settings.generated_dir, filename)
         
-        # Verify file exists and belongs to user
+        # Verify file exists
         if not os.path.exists(file_path):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -180,7 +152,7 @@ async def download_presentation(
                 detail="Invalid filename"
             )
         
-        logger.info(f"File download requested: {filename} by user {current_user.id}")
+        logger.info(f"File download requested: {filename}")
         
         return FileResponse(
             path=file_path,
@@ -195,89 +167,4 @@ async def download_presentation(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to download file"
-        )
-
-@router.get("/history")
-async def get_generation_history(
-    limit: int = 20,
-    offset: int = 0,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get user's PPT generation history"""
-    try:
-        generations = db.query(PPTGeneration).filter(
-            PPTGeneration.user_id == current_user.id
-        ).order_by(PPTGeneration.created_at.desc()).offset(offset).limit(limit).all()
-        
-        total = db.query(PPTGeneration).filter(
-            PPTGeneration.user_id == current_user.id
-        ).count()
-        
-        history = []
-        for gen in generations:
-            history.append({
-                "id": str(gen.id),
-                "prompt": gen.prompt,
-                "status": gen.status,
-                "created_at": gen.created_at.isoformat(),
-                "completed_at": gen.completed_at.isoformat() if gen.completed_at else None,
-                "file_path": gen.file_path,
-                "error_message": gen.error_message
-            })
-        
-        return {
-            "history": history,
-            "total": total,
-            "limit": limit,
-            "offset": offset
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get generation history: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get generation history"
-        )
-
-@router.delete("/history/{generation_id}")
-async def delete_generation(
-    generation_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Delete a PPT generation record and file"""
-    try:
-        generation = db.query(PPTGeneration).filter(
-            PPTGeneration.id == generation_id,
-            PPTGeneration.user_id == current_user.id
-        ).first()
-        
-        if not generation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Generation record not found"
-            )
-        
-        # Delete file if it exists
-        if generation.file_path and os.path.exists(generation.file_path):
-            try:
-                os.remove(generation.file_path)
-                logger.info(f"Deleted file: {generation.file_path}")
-            except Exception as e:
-                logger.warning(f"Failed to delete file {generation.file_path}: {str(e)}")
-        
-        # Delete database record
-        db.delete(generation)
-        db.commit()
-        
-        return {"message": "Generation record deleted successfully"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete generation: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete generation"
         )
